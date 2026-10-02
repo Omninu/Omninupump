@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#07051A">
+    <meta name="description" content="Omninu Pump: you are the $OMNINU price. Tap to pump, dodge the wicks.">
+    <link rel="icon" type="image/png" href="TemplateData/icon.png">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Omninu Pump</title>
+    <style>
+      html, body {
+        margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+        background: #07051A; color: #9C94C9;
+        font: 600 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        touch-action: none; overscroll-behavior: none;
+        -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+      }
+      /* The canvas fills the visible window minus the safe areas (iPhone notch, home bar, Android cutouts),
+         so nothing the game draws sits under them; the page background shows there instead. The game frames
+         itself to a fair landscape view inside the canvas.
+         --app-w/--app-h come from the script below: the window's real visible size. iOS Safari's 100vh
+         counts the area behind its toolbars, which pushed the bottom of the game off screen. */
+      #unity-canvas {
+        position: fixed;
+        left: env(safe-area-inset-left, 0px); top: env(safe-area-inset-top, 0px);
+        width: calc(var(--app-w, 100vw) - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+        height: calc(var(--app-h, 100vh) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        display: block; background: #07051A; outline: none;
+      }
+      /* Loading and rotate screens sit on the Omninu banner, darkened so the text stays readable. */
+      #loader, #rotate, #swipe {
+        background: linear-gradient(rgba(7, 5, 26, 0.55), rgba(7, 5, 26, 0.85)), url("TemplateData/banner.jpg") center / cover no-repeat, #07051A;
+      }
+      #loader {
+        position: fixed; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: flex-end; gap: 14px; pointer-events: none; padding-bottom: 12vh;
+      }
+      #loader .title, #rotate .title, #swipe .title { color: #F3EEFF; font-size: 30px; font-weight: 800; letter-spacing: 0.06em; text-shadow: 0 0 18px rgba(47, 216, 255, 0.6); }
+      #loader .title b, #rotate .title b, #swipe .title b { color: #FF3FD0; text-shadow: 0 0 18px rgba(255, 63, 208, 0.7); }
+      .powered { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: #C9C2F0; font-size: 12px;
+        font-weight: 700; letter-spacing: 0.12em; }
+      .powered img { width: 40px; height: 40px; }
+      #bar { width: 200px; height: 6px; background: #241B52; border-radius: 3px; overflow: hidden; }
+      #fill { width: 0; height: 100%; background: linear-gradient(90deg, #2FD8FF, #FF3FD0); transition: width 0.2s; }
+
+      /* Phones held upright: ask for landscape. */
+      #rotate {
+        position: fixed; inset: 0; display: none; flex-direction: column; align-items: center;
+        justify-content: center; gap: 18px; color: #F3EEFF; z-index: 10;
+        text-align: center; padding: 24px; box-sizing: border-box;
+      }
+      #rotate .phone {
+        width: 38px; height: 64px; border: 3px solid #2FD8FF; border-radius: 8px; box-shadow: 0 0 14px rgba(47, 216, 255, 0.6);
+        animation: turn 1.8s ease-in-out infinite;
+      }
+      @keyframes turn { 0%, 25% { transform: rotate(0deg); } 55%, 100% { transform: rotate(90deg); } }
+      #rotate .hint { color: #C9C2F0; max-width: 260px; }
+      #fullscreen {
+        display: none; margin-top: 6px; padding: 12px 22px; border: 0; border-radius: 10px;
+        background: #2FD8FF; color: #0B0820; font: 700 16px system-ui, sans-serif; box-shadow: 0 0 18px rgba(47, 216, 255, 0.5);
+      }
+      /* Set by the script below (and read by the game through OmninuOrientation.jslib). */
+      html.portrait-block #rotate { display: flex; }
+
+      /* iPhone Safari can't go fullscreen, but it shrinks its address and tab bars when the page scrolls.
+         On iPhone the page gets some scroll room; the canvas stays fixed and keeps touch-action: none,
+         so only swipes on the overlay below scroll the page. */
+      #spacer { display: none; }
+      html.ios-scroll, html.ios-scroll body { overflow: visible; height: auto; touch-action: auto; overscroll-behavior: auto; }
+      html.ios-scroll #spacer { display: block; height: 200vh; }
+      html.ios-scroll #unity-canvas { touch-action: none; }
+      #swipe {
+        position: fixed; left: 0; top: 0; width: var(--app-w, 100vw); height: var(--app-h, 100vh); display: none;
+        flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+        color: #F3EEFF; z-index: 9; text-align: center; touch-action: pan-y;
+      }
+      html.swipe-up #swipe { display: flex; }
+      #swipe .arrow {
+        width: 22px; height: 22px; border-left: 4px solid #2FD8FF; border-top: 4px solid #2FD8FF;
+        transform: rotate(45deg); filter: drop-shadow(0 0 8px rgba(47, 216, 255, 0.8));
+        animation: nudge 1.2s ease-in-out infinite;
+      }
+      @keyframes nudge { 0%, 100% { translate: 0 10px; opacity: 0.5; } 50% { translate: 0 -6px; opacity: 1; } }
+      #swipe .hint { color: #C9C2F0; font-size: 13px; }
+      #error { display: none; position: fixed; left: 16px; right: 16px; bottom: 16px; padding: 12px;
+        border-radius: 8px; background: #FF3D71; color: #fff; text-align: center; z-index: 11; }
+    </style>
+    <script>
+      // Phones and tablets held upright get the rotate screen, and the game pauses under it.
+      // CSS alone missed some in-app browsers (wallet and social apps) that don't report a coarse pointer,
+      // so this also checks the user agent. iPadOS reports a Mac user agent, hence the touch-point check.
+      (function () {
+        var ua = navigator.userAgent;
+        var touchDevice = (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) ||
+          /Android|iPhone|iPad|iPod|Mobile/i.test(ua) ||
+          (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+
+        var root = document.documentElement;
+        function portrait() { return touchDevice && window.innerHeight > window.innerWidth; }
+
+        // iPhone Safari (not a home-screen app): in landscape its bars take about a quarter of the height.
+        // iOS reports the screen size in portrait terms, so the short side is the full landscape height.
+        // Collapsed bars leave nearly all of it; under 90% means they're still showing. If the guess is off
+        // for some model, the overlay also goes away once the page grows 40px, or on a tap.
+        var iPhoneSafari = /iPhone|iPod/.test(ua) && !navigator.standalone;
+        var swipeDismissed = false, swipeShownHeight = 0;
+        if (iPhoneSafari) root.classList.add("ios-scroll");
+
+        // Unity focuses a hidden text field while the player types (sign-in, wallet), and the keyboard shrinks
+        // the page; that must not bring the swipe screen back.
+        function typing() {
+          var el = document.activeElement;
+          return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA");
+        }
+
+        function swipeNeeded() {
+          if (!iPhoneSafari || swipeDismissed || portrait() || typing()) return false;
+          var h = window.innerHeight;
+          if (h >= Math.min(screen.width, screen.height) * 0.9) return false;
+          if (swipeShownHeight && h > swipeShownHeight + 40) { swipeDismissed = true; return false; }
+          return true;
+        }
+
+        window.omninuTouchDevice = touchDevice;
+        window.omninuPortraitBlocked = portrait;
+        // True while the page covers the game (rotate or swipe screen); the game pauses under it.
+        window.omninuGameCovered = function () {
+          return root.classList.contains("portrait-block") || root.classList.contains("swipe-up");
+        };
+        window.omninuDismissSwipe = function () { swipeDismissed = true; update(); };
+
+        function update() {
+          root.style.setProperty("--app-w", window.innerWidth + "px");
+          root.style.setProperty("--app-h", window.innerHeight + "px");
+          var swipe = swipeNeeded();
+          if (swipe && !swipeShownHeight) swipeShownHeight = window.innerHeight;
+          if (!swipe) swipeShownHeight = 0;
+          root.classList.toggle("portrait-block", portrait());
+          root.classList.toggle("swipe-up", swipe);
+        }
+        update();
+        window.addEventListener("scroll", update, { passive: true });
+        window.addEventListener("resize", update);
+        window.addEventListener("orientationchange", update);
+        if (window.visualViewport) window.visualViewport.addEventListener("resize", update);
+        if (screen.orientation) screen.orientation.addEventListener("change", update);
+        document.addEventListener("focusout", function () { setTimeout(update, 300); });
+      })();
+    </script>
+  </head>
+  <body>
+    <canvas id="unity-canvas" tabindex="-1"></canvas>
+    <div id="loader">
+      <div class="title">OMNINU <b>PUMP</b></div>
+      <div id="bar"><div id="fill"></div></div>
+      <div class="powered">POWERED BY <img src="TemplateData/hra.png" alt="HRA"></div>
+    </div>
+    <div id="rotate">
+      <div class="title">OMNINU <b>PUMP</b></div>
+      <div class="phone"></div>
+      <div>Rotate your phone to landscape</div>
+      <div class="hint">The chart needs the width. Turn off rotation lock if the game doesn't turn.</div>
+      <button id="fullscreen" type="button">Play in landscape</button>
+    </div>
+    <div id="swipe">
+      <div class="title">OMNINU <b>PUMP</b></div>
+      <div class="arrow"></div>
+      <div>Swipe up for fullscreen</div>
+      <div class="hint">or tap to play as is</div>
+    </div>
+    <div id="spacer"></div>
+    <div id="error"></div>
+    <script>
+      var canvas = document.querySelector("#unity-canvas");
+      // A tap (not a swipe) on the iPhone overlay plays with Safari's bars showing.
+      document.querySelector("#swipe").addEventListener("click", window.omninuDismissSwipe);
+
+      // Android browsers can force landscape, but only from fullscreen and inside a user tap.
+      // The first tap on a phone (anywhere, rotate screen or game) goes fullscreen and locks landscape,
+      // so the game turns sideways even with the phone upright. After that, only taps on the rotate screen
+      // retry, so a player who leaves fullscreen isn't pulled back in on every flap.
+      // iPhone Safari can't lock orientation; there the rotate prompt is all we can do.
+      var fsButton = document.querySelector("#fullscreen");
+      var root = document.documentElement;
+      var canLock = !!(root.requestFullscreen && screen.orientation && screen.orientation.lock);
+      var triedLock = false, locking = false;
+
+      function lockLandscape() {
+        if (locking) return;
+        triedLock = locking = true;
+        var goFullscreen = document.fullscreenElement ? Promise.resolve() : root.requestFullscreen({ navigationUI: "hide" });
+        goFullscreen
+          .then(function () { return screen.orientation.lock("landscape"); })
+          .catch(function () { /* not supported here; the rotate prompt stays */ })
+          .then(function () { locking = false; });
+      }
+
+      if (canLock && window.omninuTouchDevice) {
+        fsButton.style.display = "inline-block";
+        // touchend counts as user activation; a touch's pointerdown doesn't.
+        document.addEventListener("touchend", function () {
+          if (!triedLock || window.omninuPortraitBlocked()) lockLandscape();
+        }, true);
+        fsButton.addEventListener("click", lockLandscape);
+      }
+
+      function showBanner(msg, type) {
+        if (type !== "error") { console.warn(msg); return; }
+        var el = document.querySelector("#error");
+        el.textContent = msg;
+        el.style.display = "block";
+      }
+
+      var buildUrl = "Build";
+      var config = {
+        arguments: [],
+        dataUrl: buildUrl + "/WebGL.data.unityweb",
+        frameworkUrl: buildUrl + "/WebGL.framework.js.unityweb",
+        codeUrl: buildUrl + "/WebGL.wasm.unityweb",
+        streamingAssetsUrl: "StreamingAssets",
+        companyName: "Omninu Community",
+        productName: "Omninu Pump",
+        productVersion: "1.0",
+        showBanner: showBanner,
+        // Cap resolution on very dense phone screens to keep mid-range Android smooth.
+        devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+      };
+
+      var script = document.createElement("script");
+      script.src = buildUrl + "/WebGL.loader.js";
+      script.onload = function () {
+        createUnityInstance(canvas, config, function (progress) {
+          document.querySelector("#fill").style.width = (100 * progress) + "%";
+        }).then(function (unityInstance) {
+          document.querySelector("#loader").remove();
+        }).catch(function (message) {
+          showBanner(message, "error");
+        });
+      };
+      document.body.appendChild(script);
+    </script>
+  </body>
+</html>
